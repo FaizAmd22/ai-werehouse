@@ -1,0 +1,91 @@
+{
+  "name": "ai-werehouse",
+  "version": "1.0.0",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix core\" \"wait-on http://localhost:5173 && electron .\"",
+    "build": "npm run build --prefix core && electron-builder",
+    "build:win": "npm run build --prefix core && electron-builder --win",
+    "build:win64": "npm run build --prefix core && electron-builder --win --x64",
+    "build:dir": "npm run build --prefix core && electron-builder --dir",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "AI Werehouse Assistant with Wake Word Detection",
+  "build": {
+    "appId": "com.aiwerehouse.app",
+    "productName": "AI Werehouse",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "core/dist/**/*",
+      "package.json",
+      ".env"
+    ],
+    "asarUnpack": [
+      "node_modules/@picovoice/**/*",
+      "node_modules/@picovoice/porcupine-node/**/*",
+      "node_modules/@picovoice/pvrecorder-node/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".env",
+        "to": ".env"
+      },
+      {
+        "from": "electron/models",
+        "to": "models",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "publisherName": "Your Company Name",
+      "verifyUpdateCodeSignature": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AI Werehouse",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "deleteAppDataOnUninstall": true
+    },
+    "mac": {
+      "target": ["dmg"],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "icon": "build/icon.png",
+      "category": "Utility"
+    }
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "electron": "^40.0.0",
+    "electron-builder": "^24.13.3",
+    "wait-on": "^9.0.3"
+  },
+  "dependencies": {
+    "@picovoice/porcupine-node": "^4.0.1",
+    "@picovoice/pvrecorder-node": "^1.2.8",
+    "dotenv": "^17.2.3",
+    "path": "^0.12.7"
+  }
+}
