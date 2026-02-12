@@ -1,18 +1,22 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld("porcupine", {
-    start: () => ipcRenderer.invoke("porcupine-start"),
-    stop: () => ipcRenderer.invoke("porcupine-stop"),
-    getStatus: () => ipcRenderer.invoke("porcupine-status"),
+contextBridge.exposeInMainWorld('electron', {
+    isElectron: true,
+    platform: process.platform,
 
-    onWakeWordDetected: (cb) => ipcRenderer.on("wake-word-detected", cb),
-    offWakeWordDetected: (cb) =>
-        ipcRenderer.removeListener("wake-word-detected", cb),
+    onWakeWordDetected: (callback) => {
+        ipcRenderer.on('wakeword:detected', callback);
+        return () => ipcRenderer.removeListener('wakeword:detected', callback);
+    },
 
-    onStatusChanged: (cb) =>
-        ipcRenderer.on("porcupine-status-changed", cb),
-    offStatusChanged: (cb) =>
-        ipcRenderer.removeListener("porcupine-status-changed", cb),
+    onWakeWordStatus: (callback) => {
+        ipcRenderer.on('wakeword:status', (_, data) => callback(data));
+        return () => ipcRenderer.removeListener('wakeword:status', callback);
+    },
+
+    getWakeWordPath: (filename) => {
+        return `/word-wake/${filename}`;
+    }
 });
 
-console.log("✅ Preload script loaded - Porcupine API exposed");
+console.log('Preload loaded');

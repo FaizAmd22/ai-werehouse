@@ -161,7 +161,7 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
       ...props.wake,
       onDetected: () => {
         if (audioState === "IDLE" && isAllowTriggeredRef.current) {
-          console.log("🔔 Wake word detected!");
+          console.log("Wake word detected!");
           setAudioState("WAITING");
           sendEvent("client:trigger");
         }
@@ -261,7 +261,6 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
     }
   }, [isConnected, sendBytes, sendEvent, stopRecord]);
 
-  // Handle WebSocket messages
   useEffect(() => {
     if (!message) return;
 
@@ -361,7 +360,6 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
     }
   }, [message, startRecord, stopRecord]);
 
-  // Re-enable trigger after cooldown
   useEffect(() => {
     const intv = setInterval(() => {
       if (!isAllowTriggeredRef.current) {
@@ -374,7 +372,6 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
     };
   }, []);
 
-  // Cleanup on unmount
   useEffect(() => {
     const audioQueue = audioQueueRef.current;
     const stopRecordFn = stopRecord;

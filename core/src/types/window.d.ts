@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// src/types/window.d.ts
 export interface WakeWordData {
     keywordIndex: number;
     keyword: string;

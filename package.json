@@ -38,7 +38,7 @@
         "to": ".env"
       },
       {
-        "from": "electron/models",
+        "from": "core/public/word-wake",
         "to": "models",
         "filter": ["**/*"]
       }
@@ -51,7 +51,7 @@
         }
       ],
       "icon": "build/icon.ico",
-      "publisherName": "Your Company Name",
+      "publisherName": "Treffix.id",
       "verifyUpdateCodeSignature": false
     },
     "nsis": {

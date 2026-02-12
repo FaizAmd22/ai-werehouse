@@ -1,78 +1,50 @@
-import { usePorcupine } from "@picovoice/porcupine-react";
-import { useEffect, useRef } from "react";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { useEffect, useRef, useState } from 'react';
 
 type UseWakeWordProps = {
-  accessKey: string;
-  keywordPath: string;
-  modelPath: string;
-  keywordLabel: string;
-  onDetected?: () => void;
+    onDetected?: () => void;
+    accessKey?: string;
+    keywordPath?: string;
+    modelPath?: string;
+    keywordLabel?: string;
 };
 
-export const useWakeWord = ({
-  accessKey,
-  keywordPath,
-  modelPath,
-  keywordLabel,
-  onDetected,
-}: UseWakeWordProps) => {
-  const accessKeyRef = useRef(accessKey);
-  const lastKeywordLabelRef = useRef<string | null>(null);
+export const useWakeWord = ({ onDetected }: UseWakeWordProps) => {
+    const [isLoaded, setIsLoaded] = useState(false);
+    const [isListening, setIsListening] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const onDetectedRef = useRef(onDetected);
 
-  const {
-    keywordDetection,
-    isLoaded,
-    isListening,
-    error,
-    init,
-    start,
-    release,
-  } = usePorcupine();
+    useEffect(() => {
+        onDetectedRef.current = onDetected;
+    }, [onDetected]);
 
-  useEffect(() => {
-    const initEngine = async () => {
-      if (accessKeyRef.current.length === 0) {
-        return;
-      }
+    useEffect(() => {
+        const win = window as any;
+        if (!win.electron) {
+            console.warn('Not in Electron, wake word disabled');
+            return;
+        }
 
-      try {
-        await init(
-          accessKeyRef.current,
-          {
-            publicPath: keywordPath,
-            label: keywordLabel,
-          },
-          {
-            publicPath: modelPath,
-          }
-        );
-      } catch (error) {
-        console.error("Porcupine init error:", error);
-      }
-    };
+        console.log('Listening via IPC...');
 
-    initEngine();
+        const removeDetected = win.electron.onWakeWordDetected(() => {
+            console.log('Detected!');
+            onDetectedRef.current?.();
+        });
 
-    return () => {
-      release();
-    };
-  }, [init, keywordLabel, keywordPath, modelPath, release]);
+        const removeStatus = win.electron.onWakeWordStatus((data: any) => {
+            console.log('Status:', data);
+            setIsLoaded(data.isLoaded);
+            setIsListening(data.isListening);
+            if (data.error) setError(data.error);
+        });
 
-  useEffect(() => {
-    if (isLoaded && !isListening) {
-      const ts = setTimeout(() => {
-        start();
-      }, 1000);
-      return () => clearTimeout(ts);
-    }
-  }, [isLoaded, isListening, start, error]);
+        return () => {
+            removeDetected?.();
+            removeStatus?.();
+        };
+    }, []);
 
-  useEffect(() => {
-    if (keywordDetection && onDetected) {
-      lastKeywordLabelRef.current = keywordLabel;
-      onDetected();
-    }
-  }, [keywordDetection, onDetected, keywordLabel]);
-
-  return { keywordDetection, isLoaded, isListening, error };
+    return { isLoaded, isListening, error, initStatus: isLoaded ? 'success' : 'pending' };
 };

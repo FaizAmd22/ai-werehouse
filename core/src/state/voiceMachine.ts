@@ -49,9 +49,6 @@ export function voiceReducer(
   action: VoiceAction
 ): VoiceState {
   switch (action.type) {
-    // =========================
-    // 🟤 WAKE WORD
-    // =========================
     case "WAKE_WORD":
       if (state.mode !== "STANDBY") return state;
       return {
@@ -64,9 +61,6 @@ export function voiceReducer(
         isRecording: false,
       };
 
-    // =========================
-    // 🎙️ RECORDING
-    // =========================
     case "RECORDING_STARTED":
       return {
         ...state,
@@ -80,14 +74,11 @@ export function voiceReducer(
         shouldRecord: false,
       };
 
-    // =========================
-    // 🔄 BACKEND PROCESSING
-    // =========================
     case "BACKEND_PROCESSING_START":
       return {
         ...state,
         isProcessing: true,
-        shouldRecord: false, // ⛔ HARD STOP
+        shouldRecord: false,
         isRecording: false,
       };
 
@@ -97,15 +88,11 @@ export function voiceReducer(
         isProcessing: false,
       };
 
-    // =========================
-    // 🧠 VOICE RESULT
-    // =========================
     case "VOICE_RESULT": {
       const text = action.text.trim();
 
-      // ❌ Tidak ada suara bermakna → tetap di LISTENING, jangan ubah state
       if (!text) {
-        console.log("⚠️ Empty voice result, staying in LISTENING");
+        console.log("Empty voice result, staying in LISTENING");
         return {
           ...state,
           shouldRecord: false,
@@ -114,7 +101,6 @@ export function voiceReducer(
         };
       }
 
-      // ❌ Command tidak dikenali → show fallback
       if (!action.segment) {
         return {
           ...state,
@@ -127,7 +113,6 @@ export function voiceReducer(
         };
       }
 
-      // ✅ Command valid → show response
       return {
         ...state,
         mode: "RESPONDING",
@@ -139,9 +124,6 @@ export function voiceReducer(
       };
     }
 
-    // =========================
-    // ⏱️ TIMEOUT (10 detik tanpa input)
-    // =========================
     case "NO_SPEECH_TIMEOUT":
       if (state.mode !== "LISTENING") return state;
       if (state.isRecording || state.isProcessing) return state;
@@ -157,26 +139,17 @@ export function voiceReducer(
         isRecording: false,
       };
 
-    // =========================
-    // 🟢 RESPONSE FINISHED (setelah typewriter selesai)
-    // =========================
     case "RESPONSE_FINISHED":
       if (state.mode !== "RESPONDING") return state;
       
-      // Setelah response selesai ditampilkan → kembali ke LISTENING
-      // PENTING: dialogText TETAP sama (tidak berubah)
       return {
         ...state,
         mode: "LISTENING",
         shouldRecord: true,
         isProcessing: false,
         isRecording: false,
-        // dialogText TIDAK DIUBAH - tetap response terakhir
       };
 
-    // =========================
-    // ⚫ END MESSAGE FINISHED
-    // =========================
     case "END_MESSAGE_FINISHED":
       if (state.mode !== "END_CONVERSATION") return state;
       return {

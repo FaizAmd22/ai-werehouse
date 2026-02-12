@@ -1,6 +1,12 @@
 /* eslint-disable react-hooks/immutability */
 import { useCallback, useEffect, useRef, useState } from "react";
 
+type WSMessage =
+  | string
+  | Blob
+  | ArrayBuffer
+  | ArrayBufferView<ArrayBuffer>;
+
 export const useWebSocket = (url: string) => {
   const socketRef = useRef<WebSocket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -9,13 +15,11 @@ export const useWebSocket = (url: string) => {
   const shouldReconnectRef = useRef(true);
 
   const openConnection = useCallback(() => {
-    // Clear any pending reconnection attempts
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
 
-    // Don't open a new connection if one is already open or connecting
     if (
       socketRef.current &&
       (socketRef.current.readyState === WebSocket.OPEN ||
@@ -46,7 +50,6 @@ export const useWebSocket = (url: string) => {
       console.log("WebSocket connection closed");
       setIsConnected(false);
 
-      // Schedule reconnection if we should reconnect
       if (shouldReconnectRef.current) {
         console.log("Scheduling reconnection in 5 seconds...");
         reconnectTimeoutRef.current = window.setTimeout(() => {
@@ -61,16 +64,13 @@ export const useWebSocket = (url: string) => {
     openConnection();
 
     return () => {
-      // Prevent reconnection on cleanup
       shouldReconnectRef.current = false;
 
-      // Clear any pending reconnection
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
 
-      // Close the socket
       if (socketRef.current) {
         socketRef.current.close();
         socketRef.current = null;
@@ -78,19 +78,20 @@ export const useWebSocket = (url: string) => {
     };
   }, [openConnection]);
 
-  const sendMessage = (
-    message: string | Blob | ArrayBufferLike | ArrayBufferView
-  ) => {
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+  const sendMessage = (message: WSMessage) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(message);
-    } else {
-      console.error("WebSocket is not open. Unable to send message.");
     }
-  };
-
+  };  
+  
   const sendBytes = (data: Uint8Array) => {
-    sendMessage(data.buffer);
-  };
+    const safeBuffer =
+      data.buffer instanceof ArrayBuffer
+        ? data.buffer
+        : new Uint8Array(data).buffer;
+  
+    sendMessage(safeBuffer);
+  };  
 
   const sendJson = (data: unknown) => {
     sendMessage(JSON.stringify(data));

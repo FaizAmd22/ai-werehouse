@@ -27,7 +27,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     try {
       await video.play();
     } catch (err) {
-      console.warn("🔁 Retry play failed:", err);
+      console.warn("Retry play failed:", err);
     }
   };
 
@@ -40,7 +40,6 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     await forcePlay();
   };
 
-  // 🎥 Ready
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -57,7 +56,6 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => video.removeEventListener("canplay", handleCanPlay);
   }, [isReady, onReady]);
 
-  // 🎬 Segment change
   useEffect(() => {
     if (!isReady || !segment) return;
 
@@ -73,7 +71,6 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     playSegment(segment);
   }, [segment, isReady]);
 
-  // ⏱️ Segment watcher
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !isReady) return;
