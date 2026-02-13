@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useWebSocket } from "./useWebSocket";
 import { useWakeWord } from "./useWakeWord";
 import { playBase64Audio } from "../libs/playBase64Audio";
+import VoiceActivityDetector, { type VADPhase } from "../utils/VoiceActivityDetector";
 
 interface QueueItem {
   audioBase64: string;
@@ -29,13 +30,6 @@ class AudioQueue {
     text: string;
     onChanged?: (text: string) => void;
   }) {
-    console.log("[AudioQueue.enqueue] Adding to queue", {
-      queueLength: this.queue.length,
-      isPlaying: this.isPlaying,
-      textLength: params.text.length,
-      audioLength: params.audioBase64.length,
-    });
-
     this.queue.push({
       audioBase64: params.audioBase64,
       text: params.text,
@@ -49,18 +43,12 @@ class AudioQueue {
   }
 
   private async playNext() {
-    console.log("[AudioQueue.playNext] Called", {
-      isPlaying: this.isPlaying,
-      queueLength: this.queue.length,
-    });
-
     if (this.isPlaying || this.queue.length === 0) {
       if (
         !this.isPlaying &&
         this.queue.length === 0 &&
         this.callbacks.onCompleted
       ) {
-        console.log("[AudioQueue.playNext] Queue complete, calling onCompleted");
         this.callbacks.onCompleted();
         this.callbacks = {};
       }
@@ -70,11 +58,6 @@ class AudioQueue {
     this.isPlaying = true;
     const { audioBase64, text } = this.queue.shift()!;
 
-    console.log("[AudioQueue.playNext] Playing audio", {
-      text,
-      remainingInQueue: this.queue.length,
-    });
-
     if (this.callbacks.onChanged) {
       this.callbacks.onChanged(text);
     }
@@ -83,23 +66,17 @@ class AudioQueue {
     this.currentAudio = audio;
 
     const handlePlaybackEnd = () => {
-      console.log("[AudioQueue.playNext] Playback ended, continuing queue");
       this.cleanup();
       this.playNext();
     };
 
     this.currentAudio.onended = handlePlaybackEnd;
-
-    this.currentAudio.onerror = (error) => {
-      console.error("[AudioQueue.playNext] Audio playback error:", error);
-      handlePlaybackEnd();
-    };
+    this.currentAudio.onerror = handlePlaybackEnd;
 
     try {
       await this.currentAudio.play();
-      console.log("[AudioQueue.playNext] Audio playing started");
     } catch (error) {
-      console.error("[AudioQueue.playNext] Audio play() error:", error);
+      console.error("[AudioQueue] Play error:", error);
       handlePlaybackEnd();
     }
   }
@@ -137,9 +114,20 @@ type UseWakeWordProps = {
   keywordLabel: string;
 };
 
+// ✅ NEW: Simplified VAD Config (matching VoiceActivityDetector)
+export type VADConfig = {
+  enabled?: boolean;
+  rmsThreshold?: number;           // RMS threshold for speech detection
+  silenceFrames?: number;          // Number of silent frames before stop
+  minAudioDuration?: number;       // Minimum duration for valid audio (ms)
+  maxRecordingDuration?: number;   // Maximum recording duration (ms)
+  checkInterval?: number;          // How often to check (ms)
+};
+
 export type UseAudioWebsocketProps = {
   url: string;
   wake: UseWakeWordProps;
+  vad?: VADConfig;  // ✅ Use new VADConfig type
 };
 
 export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
@@ -147,10 +135,29 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
   const streamRef = useRef<MediaStream | null>(null);
   const audioSourceRef = useRef<AudioNode | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
-  const isAllowTriggeredRef = useRef(true);
   const audioQueueRef = useRef(new AudioQueue());
+  
+  // ✅ Initialize VAD with simplified config
+  const vadRef = useRef<VoiceActivityDetector>(
+    new VoiceActivityDetector({
+      enabled: props.vad?.enabled ?? true,
+      rmsThreshold: props.vad?.rmsThreshold ?? 0.01,
+      silenceFrames: props.vad?.silenceFrames ?? 15,
+      minAudioDuration: props.vad?.minAudioDuration ?? 400,
+      maxRecordingDuration: props.vad?.maxRecordingDuration ?? 10000,
+      checkInterval: props.vad?.checkInterval ?? 150,
+    })
+  );
+  
+  const analyzerRef = useRef<AnalyserNode | null>(null);
+  const silenceCheckIntervalRef = useRef<number | null>(null);
+
   const [audioState, setAudioState] = useState<AudioState>("IDLE");
   const [transcript, setTranscript] = useState<string>("");
+  const [isUserSpeaking, setIsUserSpeaking] = useState(false);
+  const [vadPhase, setVadPhase] = useState<VADPhase>("IDLE");
+
+  const isSessionActiveRef = useRef(false);
 
   const { message, sendBytes, sendEvent, isConnected } = useWebSocket(
     props.url
@@ -160,15 +167,32 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
     useWakeWord({
       ...props.wake,
       onDetected: () => {
-        if (audioState === "IDLE" && isAllowTriggeredRef.current) {
-          console.log("Wake word detected!");
-          setAudioState("WAITING");
-          sendEvent("client:trigger");
+        if (isSessionActiveRef.current) {
+          console.warn("⚠️ [Wake Word] Session already active, ignoring");
+          return;
         }
+
+        if (audioState !== "IDLE") {
+          console.warn("⚠️ [Wake Word] Not IDLE, ignoring. Current state:", audioState);
+          return;
+        }
+
+        console.log("🔔 [Wake Word] Detected! Starting session...");
+        isSessionActiveRef.current = true;
+        vadRef.current.reset();
+        setAudioState("WAITING");
+        sendEvent("client:trigger");
       },
     });
 
   const stopRecord = useCallback(() => {
+    console.log("🛑 [Record] Stopping...");
+    
+    if (silenceCheckIntervalRef.current) {
+      clearInterval(silenceCheckIntervalRef.current);
+      silenceCheckIntervalRef.current = null;
+    }
+    
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -177,6 +201,11 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
     if (audioSourceRef.current) {
       audioSourceRef.current.disconnect();
       audioSourceRef.current = null;
+    }
+
+    if (analyzerRef.current) {
+      analyzerRef.current.disconnect();
+      analyzerRef.current = null;
     }
 
     if (workletNodeRef.current) {
@@ -190,18 +219,30 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
       audioContextRef.current.close().catch(console.error);
       audioContextRef.current = null;
     }
+
+    setIsUserSpeaking(false);
+    setVadPhase("IDLE");
   }, []);
 
   const startRecord = useCallback(async () => {
     if (!isConnected) {
-      console.log("Cannot start recording: not connected");
+      console.warn("⚠️ [Record] Cannot start: not connected");
       return;
     }
-    console.log("[START RECORD]");
+
+    if (audioState === "PROCESSING" || audioState === "STREAMING") {
+      console.warn("⚠️ [Record] Cannot start: already processing/streaming");
+      return;
+    }
+
+    console.log("🎤 [Record] Starting...");
 
     try {
       setAudioState("RECORDING");
       sendEvent("client:record");
+
+      // ✅ Tell VAD that recording started
+      vadRef.current.startRecording();
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -219,9 +260,16 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
       const source = audioContext.createMediaStreamSource(stream);
       const workletNode = new AudioWorkletNode(audioContext, "pcm-processor");
 
+      const analyzer = audioContext.createAnalyser();
+      analyzer.fftSize = 2048;
+      analyzerRef.current = analyzer;
+
       audioContextRef.current = audioContext;
       workletNodeRef.current = workletNode;
       audioSourceRef.current = source;
+
+      source.connect(analyzer);
+      source.connect(workletNode);
 
       workletNode.port.onmessage = (event) => {
         if (event.data) {
@@ -231,27 +279,68 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
       };
 
       workletNode.port.onmessageerror = (error) => {
-        console.error("Worklet port error:", error);
+        console.error("❌ [Record] Worklet port error:", error);
         stopRecord();
       };
 
-      source.connect(workletNode);
-
       stream.getAudioTracks().forEach((track) => {
         track.addEventListener("ended", () => {
-          console.log("[AUDIO TRACK ENDED]");
+          console.log("🎤 [Record] Audio track ended");
           stopRecord();
           setAudioState("IDLE");
+          isSessionActiveRef.current = false;
         });
       });
+
+      // ✅ VAD monitoring - SIMPLIFIED (like AudioRecorder)
+      if (props.vad?.enabled !== false) {
+        const bufferLength = analyzer.frequencyBinCount;
+        const dataArray = new Float32Array(bufferLength);
+
+        silenceCheckIntervalRef.current = window.setInterval(() => {
+          if (!workletNodeRef.current) return;
+
+          analyzer.getFloatTimeDomainData(dataArray);
+          
+          // ✅ Process audio with VAD
+          const hasVoice = vadRef.current.processAudio(dataArray);
+          const currentPhase = vadRef.current.getCurrentPhase();
+          
+          setIsUserSpeaking(hasVoice);
+          setVadPhase(currentPhase);
+
+          // ✅ Debug log when voice detected
+          if (hasVoice) {
+            const debugInfo = vadRef.current.getDebugInfo();
+            console.log("🔊 [VAD] Audio detected!", debugInfo);
+          }
+
+          // ✅ Auto-stop logic
+          if (vadRef.current.shouldStop()) {
+            // Validate if we have valid speech
+            if (!vadRef.current.hasValidSpeech()) {
+              console.warn("⚠️ [VAD] No valid speech detected, canceling...");
+              stopRecord();
+              setAudioState("IDLE");
+              isSessionActiveRef.current = false;
+              return;
+            }
+
+            console.log("✅ [VAD] Valid speech detected, ending recording");
+            stopRecord();
+            sendEvent("client:record:end");
+          }
+        }, props.vad?.checkInterval ?? 150); // ✅ Use configurable interval
+      }
+
     } catch (err) {
+      console.error("❌ [Record] Error:", err);
       setAudioState("IDLE");
+      isSessionActiveRef.current = false;
 
       if (err instanceof Error) {
         if (err.name === "NotAllowedError") {
-          alert(
-            "Microphone access denied. Please allow microphone permissions."
-          );
+          alert("Microphone access denied. Please allow microphone permissions.");
         } else if (err.name === "NotFoundError") {
           alert("No microphone found. Please connect a microphone.");
         } else {
@@ -259,118 +348,80 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
         }
       }
     }
-  }, [isConnected, sendBytes, sendEvent, stopRecord]);
+  }, [isConnected, audioState, sendBytes, sendEvent, stopRecord, props.vad]);
 
   useEffect(() => {
     if (!message) return;
 
     try {
       const msg = JSON.parse(message as string);
-      console.log("[MESSAGE RECEIVED]", msg.event);
 
-      if (!msg.event) {
-        console.warn("[INVALID MESSAGE] Missing event field:", msg);
-        return;
-      }
+      if (!msg.event) return;
 
       switch (msg.event) {
         case "on:trigger:audio": {
-          if (!msg.data?.audio) {
-            console.error("[on:trigger:audio] Missing audio data");
-            return;
-          }
+          if (!msg.data?.audio) return;
+          
           playBase64Audio(msg.data.audio, () => {
             startRecord();
           });
           break;
         }
+
         case "on:record:ended": {
-          setAudioState("IDLE");
+          console.log("🛑 [WS] Server ended recording");
           stopRecord();
-          isAllowTriggeredRef.current = false;
+          setAudioState("IDLE");
+          isSessionActiveRef.current = false;
           break;
         }
+
         case "on:llm:processing": {
-          setAudioState("PROCESSING");
+          console.log("🤖 [WS] LLM processing...");
           stopRecord();
-          return;
+          setAudioState("PROCESSING");
+          break;
         }
+
         case "on:stream:start": {
-          console.log("[STREAM START]");
           setAudioState("STREAMING");
           setTranscript("");
+          
           audioQueueRef.current.setCallbacks({
             onCompleted: () => {
-              console.log("[ALL AUDIO PLAYBACK COMPLETE]");
-              setAudioState("RECORDING");
-              startRecord();
+              setAudioState("IDLE");
+              isSessionActiveRef.current = false;
+              console.log("🔓 [Session] Unlocked");
             },
           });
-          return;
+          break;
         }
+
         case "on:stream:chunk": {
-          console.log("[STREAM CHUNK RECEIVED]");
+          if (!msg.data?.text || !msg.data?.audio) return;
 
-          if (!msg.data) {
-            console.error("[on:stream:chunk] Missing data object");
-            return;
-          }
-
-          const text = msg.data.text;
-          const audio = msg.data.audio;
-
-          if (!text || !audio) {
-            console.error("[on:stream:chunk] Invalid chunk data:", {
-              hasText: !!text,
-              hasAudio: !!audio,
-            });
-            return;
-          }
-
-          console.log("[ENQUEUING CHUNK]", {
-            textLength: text.length,
-            audioLength: audio.length,
+          audioQueueRef.current.enqueue({
+            audioBase64: msg.data.audio,
+            text: msg.data.text,
+            onChanged: (newText) => {
+              setTranscript((prev) => (prev ? prev + " " : "") + newText);
+            },
           });
+          break;
+        }
 
-          try {
-            audioQueueRef.current.enqueue({
-              audioBase64: audio,
-              text,
-              onChanged: (newText) => {
-                console.log("[TRANSCRIPT UPDATE]", newText);
-                setTranscript((prev) => (prev ? prev + " " : "") + newText);
-              },
-            });
-            console.log("[CHUNK ENQUEUED SUCCESSFULLY]");
-          } catch (error) {
-            console.error("[ENQUEUE ERROR]", error);
-          }
-          return;
-        }
         case "on:stream:complete": {
-          console.log("[STREAM COMPLETE] All chunks received from server");
-          return;
+          console.log("✅ [WS] Stream complete");
+          break;
         }
+
         default:
-          console.log("[UNKNOWN EVENT]", msg.event);
           break;
       }
     } catch (error) {
-      console.error("[MESSAGE PARSE ERROR]", error, message);
+      console.error("❌ [WS] Parse error:", error);
     }
   }, [message, startRecord, stopRecord]);
-
-  useEffect(() => {
-    const intv = setInterval(() => {
-      if (!isAllowTriggeredRef.current) {
-        isAllowTriggeredRef.current = true;
-      }
-    }, 2000);
-
-    return () => {
-      clearInterval(intv);
-    };
-  }, []);
 
   useEffect(() => {
     const audioQueue = audioQueueRef.current;
@@ -379,6 +430,11 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
     return () => {
       audioQueue.stop();
       stopRecordFn();
+      isSessionActiveRef.current = false;
+      
+      if (silenceCheckIntervalRef.current) {
+        clearInterval(silenceCheckIntervalRef.current);
+      }
     };
   }, [stopRecord]);
 
@@ -388,5 +444,7 @@ export const useAudioWebsocket = (props: UseAudioWebsocketProps) => {
     transcript,
     isWakeWordLoaded,
     isWakeWordListening,
+    isUserSpeaking,
+    vadPhase,
   };
 };
